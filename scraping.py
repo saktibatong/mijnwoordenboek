@@ -33,10 +33,10 @@ def get_entry_data(driver, word, h2):
         except NoSuchElementException:
             translation_title = None
 
-        # 2. WORD FUNCTION
-        word_function = h2.text.strip()  # h2 itself — safe, always present
+        # 2. DICTIONARY ENTRY
+        dictionary_entry = h2.text.strip()  # h2 itself — safe, always present
 
-        # 3. PART OF SPEECH
+        # 3A. PART OF SPEECH
         part_of_speech = driver.execute_script(
             """
             let el = arguments[0];
@@ -49,6 +49,18 @@ def get_entry_data(driver, word, h2):
             }
             return null;
             """, h2)  # JS already returns null if not found — no try/except needed
+        
+        # 3B. ARTICLE
+        article = driver.execute_script(
+            """
+            let fonts = arguments[0].querySelectorAll('font');
+            for (let font of fonts) {
+                if (font.style.fontSize === '8pt') {
+                    return font.textContent.trim();
+                }
+            }
+            return "-";
+            """, h2)
 
         # 4. PRONUNCIATION
         try:
@@ -163,10 +175,11 @@ def get_entry_data(driver, word, h2):
             """, h2)
 
         return {
-            "Word": word,
-            "Translation title": translation_title,
-            "Word function": word_function,
+            "Lookup term": word,
+            "Translation": translation_title,
+            "Dictionary entry": dictionary_entry,
             "Part of speech": part_of_speech,
+            "Article": article,
             "Pronunciation": pronunciation,
             "Inflections": inflections,
             "Definitions": definitions,
@@ -248,14 +261,16 @@ def save_as_txt(data, filename=None):
     with open(filename, 'w', encoding='utf-8') as f:
         for entry in data:
             f.write("=" * 70 + "\n")
-            f.write(f"Word: {entry['Word']}\n") 
+            f.write(f"Lookup term: {entry['Lookup term']}\n") 
 
-            if entry['Translation title']:
-                f.write(f"Translation: {entry['Translation title']}\n")
-            if entry['Word function']:
-                f.write(f"Word Function: {entry['Word function']}\n")
+            if entry['Translation']:
+                f.write(f"Translation: {entry['Translation']}\n")
+            if entry['Dictionary entry']:
+                f.write(f"Dictionary entry: {entry['Dictionary entry']}\n")
             if entry['Part of speech']:
                 f.write(f"Part of Speech: {entry['Part of speech']}\n")
+            if entry['Article']:
+                f.write(f"Article: {entry['Article']}\n")
             if entry['Pronunciation']:
                 f.write(f"Pronunciation: {entry['Pronunciation']}\n")
             if entry['Inflections']:
@@ -438,7 +453,8 @@ def scrape_dictionary(words, output_format='txt', output_file=None):
 # MAIN
 if __name__ == "__main__":
     # Words to scrape
-    words = ["jongen"]
+    # words = ["jongen"]
+    words = ["vrouw"]
     # words = ["jongen", "huis", "water"]
     
     # Now uses the simple format by default
