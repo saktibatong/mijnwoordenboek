@@ -94,7 +94,7 @@ def get_entry_data(driver, word, h2):
 
         # 6. DEFINITIONS (JS already returns [] if nothing found — no try/except needed)
         definitions = driver.execute_script(
-            """
+            r"""
             let start = arguments[0];
             let node = start.nextSibling;
             let results = [];
@@ -115,7 +115,7 @@ def get_entry_data(driver, word, h2):
                 // DEFINITION NUMBER & TEXT
                 if (node.nodeType === 1 && node.tagName.toLowerCase() === "font") {
                     let text = node.innerText.trim();
-                    
+
                     if (text.match(/^\d+\)$/)) {
                         if (current) results.push(current);
                         current = { definition: text, sentences: [] };
@@ -124,21 +124,21 @@ def get_entry_data(driver, word, h2):
                     }
                 }
 
-                // Text node between fonts
+                // Text node between fonts — keep "-" separators
                 if (node.nodeType === 3 && current) {
                     let text = node.textContent.trim();
-                    if (text && text !== "-") current.definition += " " + text;
+                    if (text) current.definition += " " + text;
                 }
 
                 // SENTENCE TABLE
                 if (node.nodeType === 1 && node.tagName.toLowerCase() === "table") {
                     let text = node.innerText.trim();
-                    
+
                     if (text.includes("Uitspraak") || text.includes("Verbuigingen")) {
                         node = node.nextSibling;
                         continue;
                     }
-                    
+
                     if (current) {
                         node.querySelectorAll("tr").forEach(tr => {
                             let pair = tr.innerText.trim();
@@ -146,7 +146,7 @@ def get_entry_data(driver, word, h2):
                                 current.sentences.push(pair);
                             }
                         });
-                        
+
                         // ALSO CHECK FOR HIDDEN DIVS INSIDE THIS TABLE
                         let hiddenDivs = node.querySelectorAll("div[style*='display: none']");
                         hiddenDivs.forEach(div => {
@@ -453,8 +453,10 @@ def scrape_dictionary(words, output_format='txt', output_file=None):
 # MAIN
 if __name__ == "__main__":
     # Words to scrape
-    # words = ["jongen"]
-    words = ["vrouw"]
+    words = ["jongen"]
+    # words = ["vrouw"]
+    # words = ["huis"]
+
     # words = ["jongen", "huis", "water"]
     
     # Now uses the simple format by default
