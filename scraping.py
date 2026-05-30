@@ -1,3 +1,6 @@
+# NEXT UPDATE:
+# Second try if failed
+
 #%%
 from selenium import webdriver
 from selenium.webdriver.common.by import By
@@ -70,7 +73,10 @@ def get_entry_data(
         during extraction.
     """
     try:
-        # 1. TRANSLATION TITLE
+        # 1. LOOKUP TERM
+        # The original search term is the "Lookup term" — not necessarily the same as the headword text (e.g. "lopen" → "loop").
+
+        # 2. TRANSLATION TITLE
         # The section heading (e.g. "Dutch → English") lives in the nearest
         # preceding <div class="aaa"> sibling.
         try:
@@ -80,11 +86,11 @@ def get_entry_data(
         except NoSuchElementException:
             translation_title = None
  
-        # 2. DICTIONARY ENTRY
+        # 3. DICTIONARY ENTRY
         # The headword text is the h2 element itself — always present.
         dictionary_entry: str = h2.text.strip()
  
-        # 3A. PART OF SPEECH
+        # 4. PART OF SPEECH
         # Sits in the first non-empty text node immediately after the h2.
         part_of_speech: Optional[str] = driver.execute_script(
             """
@@ -101,7 +107,7 @@ def get_entry_data(
             h2,
         )
  
-        # 3B. ARTICLE
+        # 5. ARTICLE
         # Encoded as a small <font style="font-size:8pt"> child inside the h2.
         # Returns "-" when no article is found (e.g. verbs, adjectives).
         article: str = driver.execute_script(
@@ -117,7 +123,7 @@ def get_entry_data(
             h2,
         )
  
-        # 4. PRONUNCIATION
+        # 6. PRONUNCIATION
         # Stored in the <td> that follows the "Uitspraak" label inside the
         # first sibling <table> after the h2.
         try:
@@ -129,7 +135,7 @@ def get_entry_data(
         except NoSuchElementException:
             pronunciation = None
  
-        # 5. INFLECTIONS
+        # 7. INFLECTIONS
         # Same table structure as pronunciation but keyed on "Verbuigingen".
         # JS is used to normalise whitespace around closing parentheses.
         try:
@@ -153,46 +159,46 @@ def get_entry_data(
         except NoSuchElementException:
             inflections = None
  
-        # 6. DEFINITIONS
+        # 8. DEFINITIONS
         # JS walks the DOM from h2 until it hits the next h2.inline or the
         # "Overige bronnen" section.  It collects numbered definition blocks,
         # each with optional example-sentence rows and expression pairs
         # (bold phrase + hidden translation div).
         # Returns [] when nothing is found — no try/except needed.
-        definitions: list[DefinitionBlock] = driver.execute_script(
+        definitions: list[dict] = driver.execute_script(
             r"""
             let start = arguments[0];
             let node = start.nextSibling;
             let results = [];
             let current = null;
- 
+
             function flushCurrent() {
                 if (current) {
                     results.push(current);
                     current = null;
                 }
             }
- 
+
             while (node) {
                 // STOP at next h2.inline
                 if (node.nodeType === 1 &&
                     node.tagName.toLowerCase() === "h2" &&
                     node.classList.contains("inline")) break;
- 
+
                 // STOP at "Overige bronnen" (other sources) section
                 if (node.nodeType === 1 &&
                     node.tagName.toLowerCase() === "div" &&
                     node.classList.contains("aaa") &&
                     node.innerText.trim().includes("Overige bronnen")) break;
- 
+
                 if (node.nodeType === 1 && node.tagName.toLowerCase() === "font") {
                     let text = node.innerText.trim();
- 
+
                     if (text.match(/^\d+\)$/)) {
                         // Numbered definition marker: "1)", "2)", "3)", …
                         flushCurrent();
                         current = { definition: text, sentences: [] };
- 
+
                     } else if (text && !text.match(/^\s*$/)) {
                         // Definition body text — append to current block or
                         // start an unnumbered block (e.g. single-sense verbs).
@@ -202,47 +208,47 @@ def get_entry_data(
                         current.definition += (current.definition ? " " : "") + text;
                     }
                 }
- 
+
                 // Plain text nodes between <font> tags (e.g. " - " separators)
                 if (node.nodeType === 3 && current) {
                     let text = node.textContent.trim();
                     if (text === "-") current.definition += " - ";
                     else if (text) current.definition += " " + text;
                 }
- 
+
                 if (node.nodeType === 1 && node.tagName.toLowerCase() === "table") {
                     let tableText = node.innerText.trim();
- 
+
                     // Skip the pronunciation / inflection tables already handled above
                     if (tableText.includes("Uitspraak") || tableText.includes("Verbuigingen")) {
                         node = node.nextSibling;
                         continue;
                     }
- 
+
                     if (current) {
                         node.querySelectorAll("tr").forEach(tr => {
                             // Expression rows: bold headword + hidden translation div
                             let boldFont = tr.querySelector("font[style*='color:#222']");
-                            let hiddenDiv = tr.querySelector("div[style*='display: none']");
- 
+                            let hiddenDiv = tr.querySelector("div[style*='display']");
+
                             if (boldFont || hiddenDiv) {
                                 let exprName = boldFont ? boldFont.innerText.trim() : "";
                                 let exprTranslation = "";
- 
+
                                 if (hiddenDiv) {
-                                    let fonts = hiddenDiv.querySelectorAll("font");
-                                    let parts = [];
-                                    fonts.forEach(f => {
-                                        let t = f.innerText.trim();
-                                        if (t) parts.push(t);
-                                    });
-                                    exprTranslation = parts.join(" - ");
+                                    // Replace <br> with \n to preserve separate lines
+                                    // e.g. "(=ter kennismaking) - introduction" on one line
+                                    //      "introductiekorting - introduction sale" on next
+                                    hiddenDiv.querySelectorAll("br").forEach(br => br.replaceWith("\n"));
+                                    exprTranslation = hiddenDiv.innerText.trim().replace(/\n{2,}/g, "\n");
                                 }
- 
-                                let sentence = exprName;
-                                if (exprTranslation) sentence += "\n" + exprTranslation;
-                                if (sentence) current.sentences.push(sentence);
- 
+
+                                // Combine expression name + its translations
+                                let sentence = exprName
+                                    ? exprName + "\n" + exprTranslation
+                                    : exprTranslation;
+                                if (sentence.trim()) current.sentences.push(sentence.trim());
+
                             } else {
                                 // Regular Dutch ↔ English example-sentence row
                                 let pair = tr.innerText.trim();
@@ -251,10 +257,10 @@ def get_entry_data(
                         });
                     }
                 }
- 
+
                 node = node.nextSibling;
             }
- 
+
             flushCurrent();
             return results;
             """,
@@ -420,335 +426,81 @@ def save_as_txt(
     logger.info(f"✓ Saved {len(data)} entries to {filename}")
     return filename
  
- 
-def save_as_csv_txt(
-    data: list[DictionaryEntry],
-    filename: Optional[str] = None,
-) -> str:
-    """Save *data* as a tab-separated CSV file.
- 
-    Each definition block becomes its own row; example sentences are joined
-    with " | " in the last column.
- 
-    Returns the path of the file that was written.
-    """
-    if filename is None:
-        filename = f"dictionary_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
- 
-    with open(filename, "w", encoding="utf-8", newline="") as f:
-        writer = csv.writer(f, delimiter="\t", quoting=csv.QUOTE_MINIMAL)
-        writer.writerow(
-            [
-                "Lookup term",
-                "Translation",
-                "Dictionary entry",
-                "Part of speech",
-                "Article",
-                "Pronunciation",
-                "Inflections",
-                "Definition",
-                "Example Sentences",
-            ]
-        )
- 
-        for entry in data:
-            lookup   = entry["Lookup term"] or ""
-            trans    = entry["Translation"] or ""
-            dict_ent = entry["Dictionary entry"] or ""
-            pos      = entry["Part of speech"] or ""
-            article  = entry["Article"] or ""
-            pron     = entry["Pronunciation"] or ""
-            inflect  = entry["Inflections"] or ""
- 
-            if entry["Definitions"]:
-                for defn in entry["Definitions"]:
-                    definition = defn["definition"]
-                    examples = (
-                        " | ".join(defn["sentences"]) if defn["sentences"] else ""
-                    )
-                    writer.writerow(
-                        [lookup, trans, dict_ent, pos, article, pron, inflect, definition, examples]
-                    )
-            else:
-                writer.writerow(
-                    [lookup, trans, dict_ent, pos, article, pron, inflect, "(No definitions)", ""]
-                )
- 
-    logger.info(f"✓ Saved {len(data)} entries to {filename}")
-    return filename
- 
- 
-def save_as_markdown_txt(
-    data: list[DictionaryEntry],
-    filename: Optional[str] = None,
-) -> str:
-    """Save *data* as a Markdown document.
- 
-    Each headword becomes an ``##`` section.  Definitions and example
-    sentences are rendered as nested bullet lists.
- 
-    Returns the path of the file that was written.
-    """
-    if filename is None:
-        filename = f"dictionary_{datetime.now().strftime('%Y%m%d_%H%M%S')}_markdown.txt"
- 
-    with open(filename, "w", encoding="utf-8") as f:
-        f.write("# Dictionary Export\n\n")
-        f.write(f"**Generated:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-        f.write(f"**Total entries:** {len(data)}\n\n")
-        f.write("---\n\n")
- 
-        for entry in data:
-            f.write(f"## {entry['Dictionary entry']}\n\n")
- 
-            if entry["Translation"]:
-                f.write(f"**Translation:** {entry['Translation']}\n\n")
-            if entry["Lookup term"]:
-                f.write(f"**Lookup term:** {entry['Lookup term']}\n\n")
-            if entry["Part of speech"]:
-                f.write(f"**Part of Speech:** {entry['Part of speech']}\n\n")
-            if entry["Article"]:
-                f.write(f"**Article:** {entry['Article']}\n\n")
-            if entry["Pronunciation"]:
-                f.write(f"**Pronunciation:** {entry['Pronunciation']}\n\n")
-            if entry["Inflections"]:
-                f.write(f"**Inflections:** {entry['Inflections']}\n\n")
- 
-            f.write("### Definitions\n\n")
-            if entry["Definitions"]:
-                for defn in entry["Definitions"]:
-                    f.write(f"- {defn['definition']}\n")
-                    if defn["sentences"]:
-                        for sentence in defn["sentences"]:
-                            f.write(f"  - {sentence}\n")
-                    f.write("\n")
-            else:
-                f.write("- (No definitions found)\n\n")
- 
-            f.write("---\n\n")
- 
-    logger.info(f"✓ Saved {len(data)} entries to {filename}")
-    return filename
- 
- 
-def save_as_json(
-    data: list[DictionaryEntry],
-    filename: Optional[str] = None,
-) -> str:
-    """Save *data* as a pretty-printed JSON file (UTF-8, 2-space indent).
- 
-    Returns the path of the file that was written.
-    """
-    if filename is None:
-        filename = f"dictionary_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
- 
-    with open(filename, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
- 
-    logger.info(f"✓ Saved {len(data)} entries to {filename}")
-    return filename
- 
 
-# ANKI EXPORT HELPERS
-# Part-of-speech strings that indicate a noun entry.
-# Extend this set if you encounter other labels on the target site.
-NOUN_POS_MARKERS: frozenset[str] = frozenset({"zelfstandig naamwoord", "znw", "zn"})
- 
- 
-def _is_noun(entry: DictionaryEntry) -> bool:
-    """Return ``True`` if the entry's part-of-speech field indicates a noun."""
-    pos = (entry["Part of speech"] or "").strip().lower()
-    return any(marker in pos for marker in NOUN_POS_MARKERS)
- 
- 
-def save_as_anki_full(
+def save_as_anki(
     data: list[DictionaryEntry],
-    filename: Optional[str] = None,
-    deck_tag: str = "dutch::full",
+    filename: str | None = None,
 ) -> str:
     """Save *data* as an Anki import file — **full vocabulary cards**.
- 
-    Card layout
-    -----------
-    Front:
-        ``[article] headword  (part-of-speech)  [pronunciation]``
-    Back:
-        Translation, inflections, definitions, and up to 2 example sentences
-        per definition.
- 
-    The file uses tab-separated columns compatible with Anki's plain-text
-    importer (Basic note type).  Newlines inside fields are encoded as
-    ``<br>`` HTML tags.
- 
+
+    Column order (tab-separated, no header row):
+        Dictionary entry | Part of Speech | Article | Pronunciation | Inflections | Definitions
+
+    Front/Back field mapping is configured manually in Anki on import.
+
     Parameters
     ----------
     data:
         Parsed dictionary entries to export.
     filename:
         Output path.  Auto-generated from the current timestamp when omitted.
-    deck_tag:
-        Anki deck name written to the ``#deck:`` header line.
- 
+
     Returns the path of the file that was written.
     """
     if filename is None:
-        filename = f"dictionary_{datetime.now().strftime('%Y%m%d_%H%M%S')}_anki_full.txt"
- 
+        filename = f"dictionary_{datetime.now().strftime('%Y%m%d_%H%M%S')}_anki.txt"
+
     with open(filename, "w", encoding="utf-8") as f:
-        f.write("#separator:tab\n")
-        f.write("#html:false\n")
-        f.write(f"#deck:{deck_tag}\n")
-        f.write("#notetype:Basic\n")
-        f.write("#columns:Front\tBack\tTags\n")
- 
         for entry in data:
-            # RONT
-            word    = entry["Dictionary entry"] or entry["Lookup term"] or ""
-            article = entry["Article"]
-            pos     = entry["Part of speech"]
-            pron    = entry["Pronunciation"]
- 
-            # Prepend article only when it is a real article (not "-" placeholder)
-            header = f"{article} {word}".strip() if article and article != "-" else word
-            if pos:
-                header += f"  ({pos})"
-            if pron:
-                header += f"  [{pron}]"
- 
-            front: str = header
- 
-            # BACK
-            back_parts: list[str] = []
- 
-            if entry["Translation"]:
-                back_parts.append(entry["Translation"])
-            if entry["Inflections"]:
-                back_parts.append(f"Inflections: {entry['Inflections']}")
+            # LOOKUP TERM
+            lookup_term = entry["Lookup term"] or ""
+
+            # DICTIONARY ENTRY
+            dictionary_entry = entry["Dictionary entry"] or ""
+
+            # PART OF SPEECH
+            pos = entry["Part of speech"] or ""
+
+            # ARTICLE
+            article = entry["Article"] or ""
+
+            # PRONUNCIATION
+            pronunciation = entry["Pronunciation"] or ""
+
+            # INFLECTIONS
+            inflections = entry["Inflections"] or ""
+
+            # DEFINITIONS — each definition block joined by <br>
+            # example sentences indented with bullet point
+            def_parts: list[str] = []
             if entry["Definitions"]:
                 for defn in entry["Definitions"]:
                     if defn["definition"]:
-                        back_parts.append(defn["definition"])
-                    # Limit to 2 example sentences per definition to keep cards concise
-                    for sentence in defn["sentences"][:2]:
-                        back_parts.append(f"  • {sentence}")
- 
-            back: str = "\n".join(back_parts)
- 
-            # TAGS
-            lookup_tag = (entry["Lookup term"] or "").replace(" ", "_")
-            tags = f"{deck_tag} {lookup_tag}".strip()
- 
-            # Anki uses <br> for in-field line breaks in plain-text imports
+                        # replace any newlines inside definition text itself
+                        clean_defn = defn["definition"].replace("\n", " ")
+                        def_parts.append(clean_defn + "<br>")
+                    sentences = defn["sentences"]
+                    for i, sentence in enumerate(sentences):
+                        s = sentence.replace("\n", "<br>")
+                        if i == len(sentences) - 1:
+                            def_parts.append(s + "<br>")
+                        else:
+                            def_parts.append(s)
+            definitions = "<br>".join(def_parts)
+
             f.write(
-                f"{front.replace(chr(10), '<br>')}\t"
-                f"{back.replace(chr(10), '<br>')}\t"
-                f"{tags}\n"
+                f"{lookup_term}\t"
+                f"{dictionary_entry}\t"
+                f"{pos}\t"
+                f"{article}\t"
+                f"{pronunciation}\t"
+                f"{inflections}\t"
+                f"{definitions}\n"
             )
- 
+
     logger.info(f"✓ Saved {len(data)} full vocab cards to {filename}")
     return filename
  
- 
-def save_as_anki_articles(
-    data: list[DictionaryEntry],
-    filename: Optional[str] = None,
-    deck_tag: str = "dutch::articles",
-) -> str:
-    """Save noun entries as Anki **article drill cards**.
- 
-    Card layout
-    -----------
-    Front:
-        Bare Dutch headword (no article).
-    Back:
-        ``article + headword``  (e.g. "het huis").
- 
-    Non-noun entries and entries without a valid article are silently skipped.
- 
-    Parameters
-    ----------
-    data:
-        Parsed dictionary entries to export.
-    filename:
-        Output path.  Auto-generated from the current timestamp when omitted.
-    deck_tag:
-        Anki deck name written to the ``#deck:`` header line.
- 
-    Returns the path of the file that was written.
-    """
-    if filename is None:
-        filename = (
-            f"dictionary_{datetime.now().strftime('%Y%m%d_%H%M%S')}_anki_articles.txt"
-        )
- 
-    # Only noun entries that carry a real article qualify for article drill
-    nouns = [
-        e for e in data if _is_noun(e) and e["Article"] and e["Article"] != "-"
-    ]
- 
-    with open(filename, "w", encoding="utf-8") as f:
-        f.write("#separator:tab\n")
-        f.write("#html:false\n")
-        f.write(f"#deck:{deck_tag}\n")
-        f.write("#notetype:Basic\n")
-        f.write("#columns:Front\tBack\tTags\n")
- 
-        for entry in nouns:
-            word    = entry["Dictionary entry"] or entry["Lookup term"] or ""
-            article = entry["Article"]
- 
-            front: str = word
-            back: str  = f"{article} {word}"
- 
-            lookup_tag = (entry["Lookup term"] or "").replace(" ", "_")
-            tags = f"{deck_tag} {lookup_tag}".strip()
- 
-            f.write(f"{front}\t{back}\t{tags}\n")
- 
-    logger.info(
-        f"✓ Saved {len(nouns)} article drill cards to {filename} "
-        f"({len(data) - len(nouns)} non-noun entries skipped)"
-    )
-    return filename
- 
- 
-def save_as_anki_both(
-    data: list[DictionaryEntry],
-    base_filename: Optional[str] = None,
-    deck_prefix: str = "dutch",
-) -> tuple[str, str]:
-    """Convenience wrapper — saves both Anki decks in one call.
- 
-    Parameters
-    ----------
-    data:
-        Parsed dictionary entries to export.
-    base_filename:
-        Optional base path stem.  When provided, the two files are named
-        ``<base_filename>`` and ``<base_filename>_anki_articles.txt``.
-        When omitted, auto-generated timestamps are used.
-    deck_prefix:
-        Prefix for both deck tags (e.g. ``"dutch"`` → ``"dutch::full"`` and
-        ``"dutch::articles"``).
- 
-    Returns
-    -------
-    tuple[str, str]
-        Paths of the full-vocab file and the articles-drill file respectively.
-    """
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
- 
-    full_file     = base_filename or f"dictionary_{ts}_anki_full.txt"
-    articles_file = (
-        f"{base_filename}_anki_articles.txt"
-        if base_filename
-        else f"dictionary_{ts}_anki_articles.txt"
-    )
- 
-    save_as_anki_full(data,     filename=full_file,     deck_tag=f"{deck_prefix}::full")
-    save_as_anki_articles(data, filename=articles_file, deck_tag=f"{deck_prefix}::articles")
- 
-    return full_file, articles_file
 
 #%%
 # MAIN SCRAPING FUNCTION
@@ -760,48 +512,57 @@ OutputFormat = str  # Literal["txt", "csv", "markdown", "json", "anki", "anki_fu
 def scrape_dictionary(
     words: list[str],
     output_format: OutputFormat = "txt",
-    output_file: Optional[str] = None,
+    output_dir: str | None = None,
+    output_name: str | None = None,
 ) -> None:
     """Scrape Dutch–English dictionary entries and save them to disk.
- 
+
     Opens a browser, sets the language pair to NL → EN, then iterates over
     *words*, calling :func:`get_word_data_with_retry` for each.  Collected
     entries are written in the chosen *output_format*.
- 
+
     Parameters
     ----------
     words:
         Dutch words to look up.
     output_format:
         Serialisation format.  One of:
- 
-        * ``"txt"``           — plain text (human-readable)
-        * ``"csv"``           — tab-separated CSV
-        * ``"markdown"``      — Markdown document
-        * ``"json"``          — JSON array
-        * ``"anki"``          — both Anki decks (full vocab + article drill)
-        * ``"anki_full"``     — Anki full-vocab deck only
-        * ``"anki_articles"`` — Anki article-drill deck only (nouns only)
- 
+
+        * ``"txt"``  — plain text (human-readable)
+        * ``"anki"`` — Anki import file
+
         Defaults to ``"txt"``.  Unknown values fall back to ``"txt"`` with a
         warning.
-    output_file:
-        Custom output filename / path stem.  When ``None`` a timestamped name
-        is generated automatically.
+    output_dir:
+        Directory to save the output file.  Defaults to current directory.
+    output_name:
+        Base filename without extension.  Defaults to timestamped name.
     """
     driver = None
+
+    # Build output path from directory + name
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    name = output_name or f"dictionary_{ts}"
+    directory = output_dir or ""
+    output_file = os.path.join(directory, name) if directory else name
+
+    # Create output directory if it does not exist
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+        logger.info(f"Output directory: {directory}")
+
     try:
         logger.info("Starting browser...")
         driver = webdriver.Edge()
         driver.get("https://www.mijnwoordenboek.nl/")
- 
+
         wait = WebDriverWait(driver, 10)
- 
+
         # Set language pair: NL (source) → EN (target)
         logger.info("Setting language to NL → EN...")
         Select(wait.until(EC.presence_of_element_located((By.ID, "src")))).select_by_value("NL")
         Select(driver.find_element(By.ID, "des")).select_by_value("EN")
- 
+
         all_data: list[DictionaryEntry] = []
         stats: dict[str, int] = {
             "total_words": 0,
@@ -809,11 +570,11 @@ def scrape_dictionary(
             "failed": 0,
             "total_entries": 0,
         }
- 
+
         for i, word in enumerate(words, 1):
             logger.info(f"[{i}/{len(words)}] Processing: '{word}'")
             data = get_word_data_with_retry(driver, word)
- 
+
             stats["total_words"] += 1
             if data:
                 all_data.extend(data)
@@ -823,42 +584,24 @@ def scrape_dictionary(
             else:
                 stats["failed"] += 1
                 logger.warning(f"  ✗ No data found for '{word}'")
- 
+
             # Polite delay between requests to avoid hammering the server
             if i < len(words):
                 time.sleep(uniform(1, 3))
- 
+
         # Save in the chosen format
         logger.info(f"Saving data as {output_format.upper()}...")
- 
+
         if output_format == "txt":
-            save_as_txt(all_data, output_file)
- 
-        elif output_format == "csv":
-            save_as_csv_txt(all_data, output_file)
- 
-        elif output_format == "markdown":
-            save_as_markdown_txt(all_data, output_file)
- 
-        elif output_format == "json":
-            save_as_json(all_data, output_file)
- 
+            save_as_txt(all_data, output_file + ".txt")
+
         elif output_format == "anki":
-            # Exports both decks: full-vocab + article-drill
-            save_as_anki_both(all_data, base_filename=output_file)
- 
-        elif output_format == "anki_full":
-            # Full-vocabulary deck only
-            save_as_anki_full(all_data, filename=output_file)
- 
-        elif output_format == "anki_articles":
-            # Article-drill deck only (nouns with a valid article)
-            save_as_anki_articles(all_data, filename=output_file)
- 
+            save_as_anki(all_data, filename=output_file + ".txt")
+
         else:
             logger.error(f"Unknown format '{output_format}'. Falling back to 'txt'.")
-            save_as_txt(all_data, output_file)
- 
+            save_as_txt(all_data, output_file + ".txt")
+
         # Summary
         logger.info("\n" + "=" * 70)
         logger.info("SCRAPING SUMMARY")
@@ -868,7 +611,7 @@ def scrape_dictionary(
         logger.info(f"Failed:                 {stats['failed']}")
         logger.info(f"Total entries extracted:{stats['total_entries']}")
         logger.info("=" * 70)
- 
+
     except Exception as e:
         logger.error(f"Fatal error: {e}")
     finally:
@@ -884,22 +627,19 @@ def scrape_dictionary(
 #%%
 # ENTRY POINT
 if __name__ == "__main__":
-    words = [
-        "Les",
-        "Introductie",
-        "Tekst",
-        "Luisteren",
-    ]
- 
+    words_file  = r"Woorden\Les 1 Woorden.txt"   # ← input
+    output_file = r"Resultaat"  # ← output (no extension, anki adds its own)
+
+    with open(words_file, "r", encoding="utf-8") as f:
+        words = [line.strip() for line in f if line.strip()]
+
     # output_format options:
     #   "txt"           → plain-text file
-    #   "csv"           → tab-separated CSV
-    #   "markdown"      → Markdown document
-    #   "json"          → JSON array
-    #   "anki"          → both Anki decks (full vocab + article drill)
-    #   "anki_full"     → Anki full-vocab deck only
-    #   "anki_articles" → Anki article-drill deck only (nouns)
-    scrape_dictionary(words, output_format="txt")
+    #   "anki"          → Anki deck
+    scrape_dictionary(words,
+                      output_format = "anki",
+                      output_dir    = r"Resultaat",
+                      output_name   = "ETC Anki Unit 1")
 
 # %%
 
